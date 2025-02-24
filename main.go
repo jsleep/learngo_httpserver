@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -86,37 +87,6 @@ func Clean(body string) string {
 	return strings.Join(body_words, " ")
 }
 
-func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	type response struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
-
-	resp := response{}
-	statusCode := http.StatusOK
-	if err != nil {
-		statusCode = http.StatusBadRequest
-	} else if len(params.Body) > 140 {
-		statusCode = http.StatusBadRequest
-	} else {
-		resp.CleanedBody = Clean(params.Body)
-	}
-	w.WriteHeader(statusCode)
-	w.Header().Set("Content-Type", "application/json")
-	dat, err := json.Marshal(resp)
-	if err != nil {
-		dat = []byte("{error:\"Internal Server Error\"}")
-	}
-	w.Write(dat)
-}
-
 type User struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -158,6 +128,14 @@ func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
 func (cfg *apiConfig) addChirpHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body   string    `json:"body"`
@@ -167,30 +145,108 @@ func (cfg *apiConfig) addChirpHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	decoder.Decode(&params)
+	var err error = nil
 
-	dbUser, err := cfg.db.CreateUser(r.Context(), params.Email)
-	user := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+	if len(params.Body) > 140 {
+		err = errors.New("Chirp is too long")
+		returnError(w, http.StatusBadRequest, err)
+		return
+
+	} else {
+		params.Body = Clean(params.Body)
 	}
-	if err != nil {
-		dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
-		statusCode := http.StatusInternalServerError
 
-		w.WriteHeader(statusCode)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(dat)
+	dbParams := database.CreateChirpParams{Body: params.Body, UserID: params.UserID}
+
+	dbChirp, err := cfg.db.CreateChirp(r.Context(), dbParams)
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+
+	if err != nil {
+		err = errors.New("Chirp is too long")
+		returnError(w, http.StatusBadRequest, err)
+		return
 	} else {
 		statusCode := 201
-		dat, _ := json.Marshal(user)
+		dat, _ := json.Marshal(chirp)
 
 		w.WriteHeader(statusCode)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(dat)
 	}
 
+}
+
+func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
+	chirpId, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), chirpId)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+
+	statusCode := 200
+	dat, _ := json.Marshal(chirp)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
+
+}
+
+func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
+
+	dbChirps, err := cfg.db.GetChirps(r.Context())
+
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	chirps := make([]Chirp, len(dbChirps))
+
+	for i, dbChirp := range dbChirps {
+		chirps[i] = Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body:      dbChirp.Body,
+			UserID:    dbChirp.UserID,
+		}
+	}
+
+	statusCode := 200
+	dat, _ := json.Marshal(chirps)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
+
+}
+
+func returnError(w http.ResponseWriter, statusCode int, err error) {
+	dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
 }
 
 func main() {
@@ -211,9 +267,10 @@ func main() {
 	serve_mux.HandleFunc("GET /api/healthz", healthHandler)
 	serve_mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 	serve_mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
-	serve_mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	serve_mux.HandleFunc("POST /api/users", cfg.addUserHandler)
 	serve_mux.HandleFunc("POST /api/chirps", cfg.addChirpHandler)
+	serve_mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
+	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpHandler)
 	server := http.Server{Handler: serve_mux, Addr: ":8080"}
 
 	// fmt.Println("Starting server on :8080")

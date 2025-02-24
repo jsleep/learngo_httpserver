@@ -9,4 +9,4 @@ CREATE TABLE chirps (
 );
 
 -- +goose Down
-DROP TABLE users;
+DROP TABLE chirps;
