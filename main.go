@@ -315,8 +315,8 @@ func main() {
 
 	cfg := &apiConfig{db: dbQueries, platform: os.Getenv("PLATFORM")}
 
-	handler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
-	serve_mux.Handle("/app/", cfg.middlewareMetricsInc(handler))
+	fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
+	serve_mux.Handle("/app/", cfg.middlewareMetricsInc(fileServerHandler))
 	serve_mux.HandleFunc("GET /api/healthz", healthHandler)
 	serve_mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 	serve_mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
