@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/jsleep/learngo_httpserver/internal/auth"
 	"github.com/jsleep/learngo_httpserver/internal/database"
 	_ "github.com/lib/pq"
 )
@@ -88,22 +89,31 @@ func Clean(body string) string {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID             uuid.UUID `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Email          string    `json:"email"`
+	HashedPassword string    `json:"hashed_password"`
 }
 
 func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	decoder.Decode(&params)
 
-	dbUser, err := cfg.db.CreateUser(r.Context(), params.Email)
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+	databaseUser := database.CreateUserParams{Email: params.Email, HashedPassword: hashedPassword}
+
+	dbUser, err := cfg.db.CreateUser(r.Context(), databaseUser)
 	user := User{
 		ID:        dbUser.ID,
 		CreatedAt: dbUser.CreatedAt,
@@ -119,6 +129,49 @@ func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(dat)
 	} else {
 		statusCode := 201
+		dat, _ := json.Marshal(user)
+
+		w.WriteHeader(statusCode)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(dat)
+	}
+
+}
+
+func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	decoder.Decode(&params)
+
+	dbUser, err := cfg.db.GetUser(r.Context(), params.Email)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	user := User{
+		ID:             dbUser.ID,
+		CreatedAt:      dbUser.CreatedAt,
+		UpdatedAt:      dbUser.UpdatedAt,
+		Email:          dbUser.Email,
+		HashedPassword: dbUser.HashedPassword,
+	}
+
+	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if err != nil {
+		dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
+		statusCode := http.StatusUnauthorized
+
+		w.WriteHeader(statusCode)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(dat)
+	} else {
+		statusCode := 200
 		dat, _ := json.Marshal(user)
 
 		w.WriteHeader(statusCode)
@@ -268,6 +321,7 @@ func main() {
 	serve_mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 	serve_mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	serve_mux.HandleFunc("POST /api/users", cfg.addUserHandler)
+	serve_mux.HandleFunc("POST /api/login", cfg.loginHandler)
 	serve_mux.HandleFunc("POST /api/chirps", cfg.addChirpHandler)
 	serve_mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpHandler)
