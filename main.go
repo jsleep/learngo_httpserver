@@ -121,21 +121,16 @@ func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 		Email:     dbUser.Email,
 	}
 	if err != nil {
-		dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
-		statusCode := http.StatusInternalServerError
-
-		w.WriteHeader(statusCode)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(dat)
-	} else {
-		statusCode := 201
-		dat, _ := json.Marshal(user)
-
-		w.WriteHeader(statusCode)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(dat)
+		returnError(w, http.StatusBadRequest, err)
+		return
 	}
 
+	statusCode := 201
+	dat, _ := json.Marshal(user)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
 }
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
