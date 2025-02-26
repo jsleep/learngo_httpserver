@@ -32,6 +32,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	secret         string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -89,11 +90,11 @@ func Clean(body string) string {
 }
 
 type User struct {
-	ID             uuid.UUID `json:"id"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	Email          string    `json:"email"`
-	HashedPassword string    `json:"hashed_password"`
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -135,13 +136,18 @@ func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int64  `json:"expires_in_seconds"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	decoder.Decode(&params)
+
+	if params.ExpiresInSeconds == 0 || params.ExpiresInSeconds > 3600 {
+		params.ExpiresInSeconds = 3600
+	}
 
 	dbUser, err := cfg.db.GetUser(r.Context(), params.Email)
 	if err != nil {
@@ -149,15 +155,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := User{
-		ID:             dbUser.ID,
-		CreatedAt:      dbUser.CreatedAt,
-		UpdatedAt:      dbUser.UpdatedAt,
-		Email:          dbUser.Email,
-		HashedPassword: dbUser.HashedPassword,
-	}
-
-	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	err = auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
 		dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
 		statusCode := http.StatusUnauthorized
@@ -165,14 +163,30 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(statusCode)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(dat)
-	} else {
-		statusCode := 200
-		dat, _ := json.Marshal(user)
-
-		w.WriteHeader(statusCode)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(dat)
+		return
 	}
+
+	user := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+
+	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(params.ExpiresInSeconds)*time.Second)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	user.Token = token
+
+	statusCode := 200
+	dat, _ := json.Marshal(user)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
 
 }
 
@@ -186,14 +200,23 @@ type Chirp struct {
 
 func (cfg *apiConfig) addChirpHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	decoder.Decode(&params)
-	var err error = nil
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+	uuid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, err)
+		return
+	}
 
 	if len(params.Body) > 140 {
 		err = errors.New("Chirp is too long")
@@ -204,7 +227,7 @@ func (cfg *apiConfig) addChirpHandler(w http.ResponseWriter, r *http.Request) {
 		params.Body = Clean(params.Body)
 	}
 
-	dbParams := database.CreateChirpParams{Body: params.Body, UserID: params.UserID}
+	dbParams := database.CreateChirpParams{Body: params.Body, UserID: uuid}
 
 	dbChirp, err := cfg.db.CreateChirp(r.Context(), dbParams)
 	chirp := Chirp{
@@ -308,7 +331,7 @@ func main() {
 	}
 	dbQueries := database.New(db)
 
-	cfg := &apiConfig{db: dbQueries, platform: os.Getenv("PLATFORM")}
+	cfg := &apiConfig{db: dbQueries, platform: os.Getenv("PLATFORM"), secret: os.Getenv("SECRET")}
 
 	fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	serve_mux.Handle("/app/", cfg.middlewareMetricsInc(fileServerHandler))
