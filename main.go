@@ -90,11 +90,12 @@ func Clean(body string) string {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -136,18 +137,15 @@ func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int64  `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	decoder.Decode(&params)
 
-	if params.ExpiresInSeconds == 0 || params.ExpiresInSeconds > 3600 {
-		params.ExpiresInSeconds = 3600
-	}
+	ExpiresInSeconds := 3600
 
 	dbUser, err := cfg.db.GetUser(r.Context(), params.Email)
 	if err != nil {
@@ -173,13 +171,26 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		Email:     dbUser.Email,
 	}
 
-	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(params.ExpiresInSeconds)*time.Second)
+	jwt_token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(60)*time.Minute)
 	if err != nil {
 		returnError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	user.Token = token
+	user.Token = jwt_token
+
+	refresh_token, err := auth.MakeRefreshToken()
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+	user.RefreshToken = refresh_token
+
+	_, err = cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{UserID: user.ID, Token: refresh_token, ExpiresAt: time.Now().Add(time.Duration(60*24) * time.Hour)})
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	statusCode := 200
 	dat, _ := json.Marshal(user)
