@@ -345,6 +345,11 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if db_token.RevokedAt.Valid && db_token.RevokedAt.Time.Before(time.Now()) {
+		returnError(w, http.StatusUnauthorized, errors.New("Refresh token revoked"))
+		return
+	}
+
 	jwt_token, err := auth.MakeJWT(db_token.UserID, cfg.secret, time.Duration(60)*time.Minute)
 	if err != nil {
 		returnError(w, http.StatusInternalServerError, err)
@@ -360,6 +365,23 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(dat)
 
+}
+
+func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	err = cfg.db.RevokeRefreshToken(r.Context(), token)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, errors.New("refresh token not found"))
+		return
+	}
+
+	w.WriteHeader(204)
 }
 
 func returnError(w http.ResponseWriter, statusCode int, err error) {
