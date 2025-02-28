@@ -145,8 +145,6 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	params := parameters{}
 	decoder.Decode(&params)
 
-	ExpiresInSeconds := 3600
-
 	dbUser, err := cfg.db.GetUser(r.Context(), params.Email)
 	if err != nil {
 		returnError(w, http.StatusBadRequest, err)
@@ -324,6 +322,46 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
+type TokenResponse struct {
+	Token string `json:"token"`
+}
+
+func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, r *http.Request) {
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	db_token, err := cfg.db.GetRefreshToken(r.Context(), token)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, errors.New("Refresh token not found"))
+		return
+	}
+
+	if db_token.ExpiresAt.Before(time.Now()) {
+		returnError(w, http.StatusUnauthorized, errors.New("Refresh token expired"))
+		return
+	}
+
+	jwt_token, err := auth.MakeJWT(db_token.UserID, cfg.secret, time.Duration(60)*time.Minute)
+	if err != nil {
+		returnError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	tokenResponse := TokenResponse{Token: jwt_token}
+
+	statusCode := 200
+	dat, _ := json.Marshal(tokenResponse)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
+
+}
+
 func returnError(w http.ResponseWriter, statusCode int, err error) {
 	dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
 	w.WriteHeader(statusCode)
@@ -354,6 +392,9 @@ func main() {
 	serve_mux.HandleFunc("POST /api/chirps", cfg.addChirpHandler)
 	serve_mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpHandler)
+	serve_mux.HandleFunc("POST /api/refresh", cfg.refreshHandler)
+	serve_mux.HandleFunc("POST /api/revoke", cfg.revokeHandler)
+
 	server := http.Server{Handler: serve_mux, Addr: ":8080"}
 
 	// fmt.Println("Starting server on :8080")
