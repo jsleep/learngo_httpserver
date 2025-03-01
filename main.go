@@ -384,6 +384,59 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (cfg *apiConfig) authHandler(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	decoder.Decode(&params)
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	uuid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	err = cfg.db.SetUserEmailPassword(r.Context(), database.SetUserEmailPasswordParams{ID: uuid, Email: params.Email, HashedPassword: hashedPassword})
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+	dbUser, err := cfg.db.GetUser(r.Context(), params.Email)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+	user := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+
+	statusCode := 200
+	dat, _ := json.Marshal(user)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
+}
+
 func returnError(w http.ResponseWriter, statusCode int, err error) {
 	dat := []byte(fmt.Sprintf("{error:\"%s\"}", err.Error()))
 	w.WriteHeader(statusCode)
@@ -411,6 +464,7 @@ func main() {
 	serve_mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	serve_mux.HandleFunc("POST /api/users", cfg.addUserHandler)
 	serve_mux.HandleFunc("POST /api/login", cfg.loginHandler)
+	serve_mux.HandleFunc("PUT /api/users", cfg.authHandler)
 	serve_mux.HandleFunc("POST /api/chirps", cfg.addChirpHandler)
 	serve_mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpHandler)
