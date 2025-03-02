@@ -271,7 +271,7 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	dbChirp, err := cfg.db.GetChirp(r.Context(), chirpId)
 	if err != nil {
-		returnError(w, http.StatusBadRequest, err)
+		returnError(w, http.StatusNotFound, err)
 		return
 	}
 
@@ -284,6 +284,59 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statusCode := 200
+	dat, _ := json.Marshal(chirp)
+
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
+
+}
+
+func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
+	chirpId, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), chirpId)
+	if err != nil {
+		returnError(w, http.StatusNotFound, err)
+		return
+	}
+
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	jwt_user_id, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	if chirp.UserID != jwt_user_id {
+		returnError(w, 403, errors.New("You are not authorized to delete this chirp"))
+		return
+	}
+
+	err = cfg.db.DeleteChirp(r.Context(), chirpId)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	statusCode := 204
 	dat, _ := json.Marshal(chirp)
 
 	w.WriteHeader(statusCode)
@@ -468,6 +521,7 @@ func main() {
 	serve_mux.HandleFunc("POST /api/chirps", cfg.addChirpHandler)
 	serve_mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpHandler)
+	serve_mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteChirpHandler)
 	serve_mux.HandleFunc("POST /api/refresh", cfg.refreshHandler)
 	serve_mux.HandleFunc("POST /api/revoke", cfg.revokeHandler)
 
