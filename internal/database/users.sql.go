@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -25,7 +26,7 @@ INSERT INTO users (id, created_at, updated_at, email, hashed_password)
 VALUES (
     gen_random_uuid(), now(), now(), $1, $2
 )
-RETURNING id, created_at, updated_at, email, hashed_password
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red
 `
 
 type CreateUserParams struct {
@@ -42,12 +43,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, created_at, updated_at, email, hashed_password FROM users WHERE email = $1
+SELECT id, created_at, updated_at, email, hashed_password, is_chirpy_red FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, email string) (User, error) {
@@ -59,6 +61,7 @@ func (q *Queries) GetUser(ctx context.Context, email string) (User, error) {
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
@@ -76,4 +79,17 @@ type SetUserEmailPasswordParams struct {
 func (q *Queries) SetUserEmailPassword(ctx context.Context, arg SetUserEmailPasswordParams) error {
 	_, err := q.db.ExecContext(ctx, setUserEmailPassword, arg.ID, arg.Email, arg.HashedPassword)
 	return err
+}
+
+const setUserIsChirpyRed = `-- name: SetUserIsChirpyRed :execresult
+UPDATE users SET is_chirpy_red=$2, updated_at=now() WHERE id = $1
+`
+
+type SetUserIsChirpyRedParams struct {
+	ID          uuid.UUID
+	IsChirpyRed bool
+}
+
+func (q *Queries) SetUserIsChirpyRed(ctx context.Context, arg SetUserIsChirpyRedParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, setUserIsChirpyRed, arg.ID, arg.IsChirpyRed)
 }

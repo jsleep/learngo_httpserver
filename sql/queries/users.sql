@@ -13,3 +13,6 @@ UPDATE users SET email = $2, hashed_password = $3, updated_at=now() WHERE id = $
 
 -- name: ClearUsers :exec
 DELETE FROM users;
+
+-- name: SetUserIsChirpyRed :execresult
+UPDATE users SET is_chirpy_red=$2, updated_at=now() WHERE id = $1;

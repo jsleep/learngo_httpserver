@@ -96,6 +96,7 @@ type User struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -117,10 +118,11 @@ func (cfg *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	dbUser, err := cfg.db.CreateUser(r.Context(), databaseUser)
 	user := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:          dbUser.ID,
+		CreatedAt:   dbUser.CreatedAt,
+		UpdatedAt:   dbUser.UpdatedAt,
+		Email:       dbUser.Email,
+		IsChirpyRed: dbUser.IsChirpyRed,
 	}
 	if err != nil {
 		returnError(w, http.StatusBadRequest, err)
@@ -163,10 +165,11 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:          dbUser.ID,
+		CreatedAt:   dbUser.CreatedAt,
+		UpdatedAt:   dbUser.UpdatedAt,
+		Email:       dbUser.Email,
+		IsChirpyRed: dbUser.IsChirpyRed,
 	}
 
 	jwt_token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(60)*time.Minute)
@@ -476,10 +479,11 @@ func (cfg *apiConfig) authHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:          dbUser.ID,
+		CreatedAt:   dbUser.CreatedAt,
+		UpdatedAt:   dbUser.UpdatedAt,
+		Email:       dbUser.Email,
+		IsChirpyRed: dbUser.IsChirpyRed,
 	}
 
 	statusCode := 200
@@ -495,6 +499,56 @@ func returnError(w http.ResponseWriter, statusCode int, err error) {
 	w.WriteHeader(statusCode)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(dat)
+}
+
+func (cfg *apiConfig) chirpyRedHandler(w http.ResponseWriter, r *http.Request) {
+	type data struct {
+		UserID string `json:"user_id"`
+	}
+
+	type parameters struct {
+		Event string `json:"event"`
+		Data  data   `json:"data"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	decoder.Decode(&params)
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{body:\"event != user.upgraded\"}"))
+		return
+	}
+
+	uuid, err := uuid.Parse(params.Data.UserID)
+	if err != nil {
+		returnError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	setChirpyParams := database.SetUserIsChirpyRedParams{ID: uuid, IsChirpyRed: true}
+	result, err := cfg.db.SetUserIsChirpyRed(r.Context(), setChirpyParams)
+	if err != nil {
+		returnError(w, http.StatusNotFound, err)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		returnError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if rowsAffected == 0 {
+		returnError(w, http.StatusNotFound, fmt.Errorf("user not found"))
+		return
+	}
+
+	w.WriteHeader(204)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("{body:\"user upgraded\"}"))
 }
 
 func main() {
@@ -524,6 +578,7 @@ func main() {
 	serve_mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteChirpHandler)
 	serve_mux.HandleFunc("POST /api/refresh", cfg.refreshHandler)
 	serve_mux.HandleFunc("POST /api/revoke", cfg.revokeHandler)
+	serve_mux.HandleFunc("POST /api/polka/webhooks", cfg.chirpyRedHandler)
 
 	server := http.Server{Handler: serve_mux, Addr: ":8080"}
 
