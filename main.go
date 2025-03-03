@@ -33,6 +33,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	secret         string
+	polkaKey       string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -511,6 +512,16 @@ func (cfg *apiConfig) chirpyRedHandler(w http.ResponseWriter, r *http.Request) {
 		Data  data   `json:"data"`
 	}
 
+	reqKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		returnError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if reqKey != cfg.polkaKey {
+		returnError(w, http.StatusUnauthorized, errors.New("invalid API key"))
+		return
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	decoder.Decode(&params)
@@ -562,7 +573,7 @@ func main() {
 	}
 	dbQueries := database.New(db)
 
-	cfg := &apiConfig{db: dbQueries, platform: os.Getenv("PLATFORM"), secret: os.Getenv("SECRET")}
+	cfg := &apiConfig{db: dbQueries, platform: os.Getenv("PLATFORM"), secret: os.Getenv("SECRET"), polkaKey: os.Getenv("POLKA_KEY")}
 
 	fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	serve_mux.Handle("/app/", cfg.middlewareMetricsInc(fileServerHandler))

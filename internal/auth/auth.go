@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -74,4 +75,12 @@ func MakeRefreshToken() (string, error) {
 		return "", fmt.Errorf("expected to read %d bytes, got %d", len(b), n)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func GetAPIKey(headers http.Header) (string, error) {
+	if len(headers["Authorization"]) == 0 {
+		return "", fmt.Errorf("missing api key header")
+	}
+	tokens := strings.Split(headers["Authorization"][0], " ")
+	return tokens[1], nil
 }
