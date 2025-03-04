@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -350,13 +351,31 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	s := r.URL.Query().Get("author_id")
 
-	dbChirps, err := cfg.db.GetChirps(r.Context())
+	var dbChirps []database.Chirp
+	var err error
 
-	if err != nil {
-		returnError(w, http.StatusBadRequest, err)
-		return
+	if s == "" {
+		dbChirps, err = cfg.db.GetChirps(r.Context())
+		if err != nil {
+			returnError(w, http.StatusBadRequest, err)
+			return
+		}
+	} else {
+		authorId, err := uuid.Parse(s)
+		if err != nil {
+			returnError(w, http.StatusBadRequest, err)
+			return
+		}
+		dbChirps, err = cfg.db.GetChirpsFromAuthor(r.Context(), authorId)
+		if err != nil {
+			returnError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
+
+	s = r.URL.Query().Get("sort")
 
 	chirps := make([]Chirp, len(dbChirps))
 
@@ -368,6 +387,13 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 			Body:      dbChirp.Body,
 			UserID:    dbChirp.UserID,
 		}
+	}
+
+	// asc by default in db
+	if s == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
 	}
 
 	statusCode := 200
